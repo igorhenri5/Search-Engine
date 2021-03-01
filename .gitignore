@@ -7,3 +7,8 @@
 *.o
 *.html
 *.htm
+indexer/cpp/include/rapidjson/
+
+*.pdf
+
+indexer/include/rapidjson/
