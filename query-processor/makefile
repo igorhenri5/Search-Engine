@@ -13,8 +13,7 @@ run1kk:
 
 run50k: 
 	rm -rf output/* 50k.txt
-	./main.out ./queries.txt ../indexer/output/merged.idx ../indexer/output/vocab.txt ../indexer/output/urls.txt 5 >> 50k.txt
-
+	./main.out ./queries.txt ../indexer/50k/merged.idx ../indexer/50k/vocab.txt ../indexer/50k/urls.txt 5 >> 50k.txt
 
 test:
 	rm -rf output/* saida.txt
