@@ -4,28 +4,27 @@
 
 QueryProcessor::QueryProcessor( std::string indexFilePath, 
                                 std::string vocabularyFilePath,
-                                std::string urlsFilePath){
+                                std::string urlsFilePath,
+                                std::string normsFilePath){
 
     this->indexFilePath = indexFilePath;
     this->vocabularyFilePath = vocabularyFilePath;
     this->urlsFilePath = urlsFilePath;
+    this->normsFilePath = normsFilePath;
 
-    this->docsWeightMap = new std::unordered_map<int, std::unordered_map<std::string, double>*>;
+    this->docsNormMap = new std::unordered_map<int, double>;
     this->vocabulary = new std::unordered_map<std::string, std::pair<double, unsigned int>>;
     this->urlMap = new std::unordered_map<int, std::string>;
 
     load_urls();
     load_vocabulary();
-    read_index_fetch_weight();
+    load_document_norms();
 }
 
 QueryProcessor::~QueryProcessor(){
     delete this->vocabulary;
     delete this->urlMap;
-    for(auto it=this->docsWeightMap->begin(); it!=this->docsWeightMap->end(); ++it){
-        delete it->second;
-    }
-    delete this->docsWeightMap;
+    delete this->docsNormMap;
 }
 
 std::ifstream& jump_lines(std::ifstream& file, unsigned int num){
@@ -79,34 +78,29 @@ void QueryProcessor::load_urls(){
     this->urlsFile.close();
 }
 
-void QueryProcessor::read_index_fetch_weight(){   
-    std::cout << "RIFW" << std::endl; 
-    this->indexFile.open(indexFilePath);
-    if(!this->indexFile.is_open()){
-       std::cerr << "Could not open index file" << std::endl;
-       exit(2); 
+void QueryProcessor::load_document_norms(){   
+    std::cout << "LDN" << std::endl; 
+    this->normFile.open(normsFilePath);
+    if(!this->normFile.is_open()){
+       std::cerr << "Could not open norms file" << std::endl;
+       exit(5); 
     }
 
     std::string line;
-    std::string term;
-    unsigned int docId, position;
-    while(getline(this->indexFile, line)){
+    int docId;
+    double norm;
+    while(getline(this->normFile, line)){
         std::stringstream* ss = new std::stringstream(line);
-        *ss >> term >> docId >> position;
-        if(!(this->docsWeightMap->find(docId) == this->docsWeightMap->end())){
-            if(!(this->docsWeightMap->at(docId)->find(term) == this->docsWeightMap->at(docId)->end())){
-                this->docsWeightMap->at(docId)->at(term) += 1.0;
-            }else{
-                this->docsWeightMap->at(docId)->insert({term, 1.0});
-            }
+        *ss >> docId >> norm;
+        if(!(this->docsNormMap->find(docId) == this->docsNormMap->end())){
+            this->docsNormMap->at(docId) = norm;
         }else{
-            this->docsWeightMap->insert({docId, new std::unordered_map<std::string, double>});
-            this->docsWeightMap->at(docId)->insert({term, 1.0});
+            this->docsNormMap->insert({docId, norm});
         }
         delete ss;
     } 
 
-    this->indexFile.close();
+    this->normFile.close();
 }
 
 void QueryProcessor::pre_process_query(std::string query){
@@ -128,19 +122,9 @@ void QueryProcessor::pre_process_query(std::string query){
 void QueryProcessor::to_string(){
     int i = 0;
 
-    // std::cout << "\n----------------QueryWM------------------" << std::endl; 
-    // for(auto it=this->queryWeightMap->begin(); it!=this->queryWeightMap->end(); ++it){
-    //     std::cout << it->first << " :: " << it->second << '\n';
-    //     if(i>=100) break; i++;
-    // }
-    // std::cout << "------------------------------------------" << std::endl; 
-    
-    i = 0;
-    std::cout << "\n----------------DocsWM------------------" << std::endl; 
-    for(auto it=this->docsWeightMap->begin(); it!=this->docsWeightMap->end(); ++it){
-        for(auto it2 = it->second->begin(); it2 != it->second->end(); ++it2){
-            std::cout << it->first << " -> " << it2->first << " :: " << it2->second << '\n';
-        }
+    std::cout << "\n----------------DocsNM------------------" << std::endl; 
+    for(auto it=this->docsNormMap->begin(); it!=this->docsNormMap->end(); ++it){
+        std::cout << it->first << " :: " << it->second << '\n';
         if(i>=100) break; i++;
     }
     std::cout << "------------------------------------------" << std::endl; 
@@ -174,135 +158,138 @@ void QueryProcessor::retrieve_k_first_results(std::string query, int k){
     this->queryWeightMap = new std::map< std::string, double>;
     pre_process_query(query);
 
-        auto t1 = std::chrono::high_resolution_clock::now();
     std::unordered_map<int, double>* scores = new std::unordered_map<int, double>; //document score map
+    std::unordered_map<std::string, std::unordered_map<int, double>*>* tfCache = new std::unordered_map<std::string, std::unordered_map<int, double>*>;
 
-    /*
-        para a lista invertida de cada termo
-            insert todos os documentos se ainda nao existir
-    */
-        this->indexFile.open(indexFilePath);
-        if(!this->indexFile.is_open()){
-            std::cerr << "Could not open index file" << std::endl;
-            exit(2); 
+    this->indexFile.open(indexFilePath);
+    if(!this->indexFile.is_open()){
+        std::cerr << "Could not open index file" << std::endl;
+        exit(2); 
+    }
+
+    //INTERSECT
+    auto t1 = std::chrono::high_resolution_clock::now();
+
+    std::string line;
+    std::string term, currTerm; 
+    int qTermCount = 0;
+    unsigned int docId, position, nextLine, hopSize;
+    nextLine = 1;
+    currTerm = "";
+    
+    for(auto qTerm=this->queryWeightMap->begin(); qTerm!=this->queryWeightMap->end(); ++qTerm){
+        //1 termo = termo atual da query
+        //2 se nao tiver no vocabulario, vai pra prox
+        //3 pula n linhas (suficiente pra levar até vocabulary->at(term)->second) (vocabulary->at(term)->second - nextLine)
+        //4 le até o termo nao ser mais igual ao último
+        //repete
+
+        //1
+        term = qTerm->first;
+
+        //2
+        if(this->vocabulary->find(term) == this->vocabulary->end()){
+            continue;
         }
+        tfCache->insert({term, new std::unordered_map<int, double>()});
 
-        std::string line;
-        std::string term, currTerm; 
-        int qTermCount = 0;
-        unsigned int docId, position, currLine, hopSize;
-        currLine = 0;
-        currTerm = "";
-        
-        for(auto qTerm=this->queryWeightMap->begin(); qTerm!=this->queryWeightMap->end(); ++qTerm){
-            //1 termo = termo atual da query
-            //2 se nao tiver no vocabulario, vai pra prox
-            //3 pula n linhas (suficiente pra levar até vocabulary->at(term)->second) (vocabulary->at(term)->second - currLine)
-            //4 le até o termo nao ser mais igual ao último
-            //repete
+        //3
+        hopSize = vocabulary->at(term).second - (nextLine-1);
+        jump_lines(this->indexFile, hopSize);
+        nextLine = vocabulary->at(term).second;
 
-            //1
-            term = qTerm->first;
-
-            //2
-            if(this->vocabulary->find(term) == this->vocabulary->end()){
-                // visitedQueryTerm.insert({qTerm->first, -1});
-                continue;
+        //4
+        if(qTerm == this->queryWeightMap->begin() || currTerm!=term){
+            if(!getline(this->indexFile, line)){
+                break;
             }
-            //3
-            hopSize = vocabulary->at(term).second - currLine;
-            jump_lines(this->indexFile, hopSize);
-
-            //4
-            if(qTerm == this->queryWeightMap->begin() && currTerm!=term){
-                if(!getline(this->indexFile, line)){
-                    break;
-                }
-                currLine++;
-            }
+            nextLine++;
             std::stringstream* ss = new std::stringstream(line);
             *ss >> currTerm >> docId >> position;
             delete ss;
-            while(currTerm == term){
-                if(scores->find(docId) == scores->end()){
-                    if(INNER_JOIN){
-                        if(qTerm == this->queryWeightMap->begin()){
-                            scores->insert({docId, 1.0});
-                        }
-                    }else{
-                        scores->insert({docId, 0.0});
+        }
+
+        while(currTerm == term){
+            if(scores->find(docId) == scores->end()){
+                if(INNER_JOIN){
+                    if(qTerm == this->queryWeightMap->begin()){
+                        scores->insert({docId, 1.0});
                     }
                 }else{
-                    if(INNER_JOIN){
-                        if(scores->at(docId) == (double)qTermCount){
-                            scores->at(docId) += 1.0;
-                        }
+                    scores->insert({docId, 0.0});
+                }
+            }else{
+                if(INNER_JOIN){
+                    if(scores->at(docId) == (double)qTermCount){
+                        scores->at(docId) += 1.0;
                     }
                 }
-                if(!getline(this->indexFile, line)){
-                    break;
-                }
-                currLine++;
-                std::stringstream* ss = new std::stringstream(line);
-                *ss >> currTerm >> docId >> position;
-                delete ss;
             }
-            qTermCount++;
+            if(tfCache->at(term)->find(docId) == tfCache->at(term)->end()){
+                tfCache->at(term)->insert({docId, 1.0});
+            }else{
+                tfCache->at(term)->at(docId) += 1.0;
+            }
+
+            if(!getline(this->indexFile, line)){
+                break;
+            }
+            nextLine++;
+            std::stringstream* ss = new std::stringstream(line);
+            *ss >> currTerm >> docId >> position;
+            delete ss;
         }
-        this->indexFile.close(); 
-
-
-        if(INNER_JOIN){
-            // std::cout << "QTC " << qTermCount << std::endl;
-            for (auto doc=scores->begin(); doc!=scores->end(); ){
-                if(doc->second != qTermCount){
-                    scores->erase(doc++);  
-                }
-                else{
-                    // std::cout << " i-dc " << doc->first << std::endl;
-                    scores->at(doc->first) = 0.0;
-                    ++doc;
-                }
+        qTermCount++;
+    }
+    if(INNER_JOIN){
+        for (auto doc=scores->begin(); doc!=scores->end(); ){
+            if(doc->second != qTermCount){
+                scores->erase(doc++);  
+            }
+            else{
+                scores->at(doc->first) = 0.0;
+                ++doc;
             }
         }
+    }
 
-        auto t2 = std::chrono::high_resolution_clock::now();
-        std::chrono::duration<double, std::milli> elapsed = t2 - t1;
-        std::cout << "intersect Elapsed Time: " << elapsed.count() << " milliseconds" << std::endl;
+    auto t2 = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double, std::milli> elapsed = t2 - t1;
+    std::cout << "intersect Elapsed Time: " << elapsed.count() << " milliseconds" << std::endl;
+    this->indexFile.close(); 
 
-    //calculate scores
-        t1 = std::chrono::high_resolution_clock::now();        
+    //CALCULATE SCORES
+    t1 = std::chrono::high_resolution_clock::now();  
 
     int i = 1;
-    int currdocId;
+    int currDocId;
     double numerator, termIdf, docTermTfIdf, queryTermTfIdf, denominator, termWeight, aux;
     for(auto doc=scores->begin(); doc!=scores->end(); ++doc){
-        currdocId = doc->first;
+        currDocId = doc->first;
 
+        // E wi,j x wi,q
         numerator = 0.0;
         for(auto qTerm=this->queryWeightMap->begin(); qTerm!=this->queryWeightMap->end(); ++qTerm){
             if(this->vocabulary->find(qTerm->first) == this->vocabulary->end())
                 continue;
 
             termIdf = this->vocabulary->at(qTerm->first).first;
-
-            if(!(this->docsWeightMap->at(currdocId)->find(qTerm->first) == this->docsWeightMap->at(currdocId)->end())){
-                docTermTfIdf = (1.0 + log2(this->docsWeightMap->at(currdocId)->at(qTerm->first))) * termIdf;
-            }else{
-                docTermTfIdf = 0.0;
+            
+            if(!(tfCache->find(qTerm->first) == tfCache->end())){
+                if(!(tfCache->at(qTerm->first)->find(currDocId) == tfCache->at(qTerm->first)->end())){
+                    docTermTfIdf = (1.0 + log2(tfCache->at(qTerm->first)->at(currDocId))) * termIdf;
+                }else{
+                    docTermTfIdf = 0.0;
+                }
             }
+
             queryTermTfIdf = (1.0 + log2(qTerm->second)) * termIdf;
             numerator +=  docTermTfIdf * queryTermTfIdf;
         }
 
+        // E ||wj|| x ||wq||
         denominator = 0.0;
-        for(auto entry=this->docsWeightMap->at(currdocId)->begin(); entry!=this->docsWeightMap->at(currdocId)->end(); ++entry){
-            if(this->vocabulary->find(entry->first) == this->vocabulary->end())
-                continue;
-            termWeight = (1.0 + log2(entry->second)) * this->vocabulary->at(entry->first).first;
-            denominator += termWeight*termWeight;
-        }
-        denominator = sqrt(denominator);
+        denominator = this->docsNormMap->at(currDocId);
 
         aux = 0.0;
         for(auto entry=this->queryWeightMap->begin(); entry!=this->queryWeightMap->end(); ++entry){
@@ -316,11 +303,12 @@ void QueryProcessor::retrieve_k_first_results(std::string query, int k){
         
         if(!denominator == 0.0)
             doc->second = numerator/denominator; 
+
         i++;
     }
-        t2 = std::chrono::high_resolution_clock::now();
-        elapsed = t2 - t1;
-        std::cout << "calc. score Elapsed Time: " << elapsed.count() << " milliseconds" << std::endl;
+    t2 = std::chrono::high_resolution_clock::now();
+    elapsed = t2 - t1;
+    std::cout << "calc. score Elapsed Time: " << elapsed.count() << " milliseconds" << std::endl;
 
     //build vector and sort
     std::vector<std::pair<int, double>> results;
@@ -328,7 +316,6 @@ void QueryProcessor::retrieve_k_first_results(std::string query, int k){
         results.push_back(std::make_pair(entry->first, entry->second));
     }
     sort(results.begin(), results.end(), compare_score_greater);
-
 
     //print k first results
     std::cout << "\n----------------SCORES-----------------" << std::endl; 
@@ -340,6 +327,10 @@ void QueryProcessor::retrieve_k_first_results(std::string query, int k){
     std::cout << "------------------------------------------" << std::endl; 
 
     //clear query term weight map 
+    for(auto it = tfCache->begin(); it != tfCache->end(); ++it){
+        delete it->second;
+    }
+    delete tfCache;
     delete scores;
     delete this->queryWeightMap;
 }
