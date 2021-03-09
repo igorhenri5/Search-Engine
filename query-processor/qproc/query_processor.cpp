@@ -11,7 +11,7 @@ QueryProcessor::QueryProcessor( std::string indexFilePath,
     this->urlsFilePath = urlsFilePath;
 
     this->docsWeightMap = new std::unordered_map<int, std::unordered_map<std::string, double>*>;
-    this->vocabulary = new std::unordered_map<std::string, std::tuple<double, unsigned int, unsigned int>>;
+    this->vocabulary = new std::unordered_map<std::string, std::pair<double, unsigned int>>;
     this->urlMap = new std::unordered_map<int, std::string>;
 
     load_urls();
