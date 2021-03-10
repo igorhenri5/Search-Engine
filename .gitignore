@@ -4,6 +4,7 @@
 *.out 
 *.json 
 *.jl 
+*.jsonl
 *.o
 *.html
 *.htm

@@ -9,7 +9,7 @@ run:
 
 run1kk: 
 	rm -rf output/* 1kk.txt
-	./main.out ./old_queries.txt ../indexer/1kk/merged.idx ../indexer/1kk/vocab.txt ../indexer/1kk/urls.txt 1kknorm.txt 5 >> 1kk.txt
+	./main.out ./queries.txt ../indexer/1kk/merged.idx ../indexer/1kk/vocab.txt ../indexer/1kk/urls.txt 1kknorm.txt 5 >> 1kk.txt
 
 run50k: 
 	rm -rf output/* 50k.txt

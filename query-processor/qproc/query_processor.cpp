@@ -15,16 +15,19 @@ QueryProcessor::QueryProcessor( std::string indexFilePath,
     this->docsNormMap = new std::unordered_map<int, double>;
     this->vocabulary = new std::unordered_map<std::string, std::pair<double, unsigned int>>;
     this->urlMap = new std::unordered_map<int, std::string>;
-
+    this->pageRank = new std::unordered_map<int, double>;
+    
     load_urls();
     load_vocabulary();
     load_document_norms();
+    load_page_rank();
 }
 
 QueryProcessor::~QueryProcessor(){
     delete this->vocabulary;
     delete this->urlMap;
     delete this->docsNormMap;
+    delete this->pageRank;
 }
 
 std::ifstream& jump_lines(std::ifstream& file, unsigned int num){
@@ -81,7 +84,7 @@ void QueryProcessor::load_urls(){
 void QueryProcessor::load_document_norms(){   
     std::cout << "LDN" << std::endl; 
     this->normFile.open(normsFilePath);
-    if(!this->normFile.is_open()){
+    if(!this->normFile.is_open()){ 
        std::cerr << "Could not open norms file" << std::endl;
        exit(5); 
     }
@@ -101,6 +104,32 @@ void QueryProcessor::load_document_norms(){
     } 
 
     this->normFile.close();
+}
+
+void QueryProcessor::load_page_rank(){
+    std::cout << "LPR" << std::endl; 
+
+    std::ifstream pageRankFile("./pagerank/pagerank.txt");
+    if(!pageRankFile.is_open()){
+       std::cerr << "Could not open pgrank file" << std::endl;
+       exit(6); 
+    }
+
+    std::string line;
+    int docId;
+    double rank;
+    while(getline(pageRankFile, line)){
+        std::stringstream* ss = new std::stringstream(line);
+        *ss >> docId >> rank;
+        if(!(this->pageRank->find(docId) == this->pageRank->end())){
+            this->pageRank->at(docId) = rank;
+        }else{ 
+            this->pageRank->insert({docId, rank});
+        }
+        delete ss;
+    } 
+
+    pageRankFile.close();
 }
 
 void QueryProcessor::pre_process_query(std::string query){
@@ -140,6 +169,14 @@ void QueryProcessor::to_string(){
     i = 0;
     std::cout << "\n--------------URLS----------------" << std::endl; 
     for(auto it=this->urlMap->begin(); it!=this->urlMap->end(); ++it){
+        std::cout << it->first << " :: " << it->second << '\n';
+        if(i>=100) break; i++;
+    }
+    std::cout << "------------------------------------------" << std::endl; 
+
+    i = 0;
+    std::cout << "\n---------------Page Rank----------------" << std::endl; 
+    for(auto it=this->pageRank->begin(); it!=this->pageRank->end(); ++it){
         std::cout << it->first << " :: " << it->second << '\n';
         if(i>=100) break; i++;
     }
@@ -310,17 +347,21 @@ void QueryProcessor::retrieve_k_first_results(std::string query, int k){
     elapsed = t2 - t1;
     std::cout << "calc. score Elapsed Time: " << elapsed.count() << " milliseconds" << std::endl;
 
-    //build vector and sort
+    //build vector and sort + incorporate pagerank
     std::vector<std::pair<int, double>> results;
+    double score, alpha;
+    alpha = 0.25;
     for(auto entry = scores->begin(); entry != scores->end(); ++entry){
-        results.push_back(std::make_pair(entry->first, entry->second));
+        score = alpha * entry->second + (1.0-alpha) * this->pageRank->at(entry->first);
+        // score = entry->second
+        results.push_back(std::make_pair(entry->first, score));
     }
     sort(results.begin(), results.end(), compare_score_greater);
 
     //print k first results
     std::cout << "\n----------------SCORES-----------------" << std::endl; 
     for(auto it=results.begin(); it!=results.end() && k>0; ++it){
-        std::cout << this->urlMap->at(it->first) << " :: " << it->second << '\n';
+        std::cout << this->urlMap->at(it->first) << " :: " << it->second << " " << scores->at(it->first) << '\n';
         // std::cout << it->first << " :: " << it->second << '\n';
         k--;
     }

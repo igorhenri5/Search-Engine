@@ -34,12 +34,13 @@ private:
     std::unordered_map<int, double>* docsNormMap;
     std::unordered_map<std::string, std::pair<double, unsigned int>>* vocabulary;
     std::unordered_map<int, std::string>* urlMap;
+    std::unordered_map<int, double>* pageRank;
 
     void load_queries();
     void load_urls();
     void load_vocabulary();
     void load_document_norms();
-    // void read_index_fetch_weight();
+    void load_page_rank();
     void pre_process_query(std::string query);
 
     static bool compare_doc_id_smaller(const std::pair<int, double> &a, const std::pair<int, double> &b);
